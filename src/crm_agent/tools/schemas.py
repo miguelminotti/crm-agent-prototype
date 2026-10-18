@@ -54,5 +54,23 @@ class CreateContactInput(BaseModel):
         return _digits_only(v)
 
 
+class FindCompaniesInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    query: str = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="The query string to search for matching companies. CNPJ will be matched if included in the query. Name will be matched otherwise, case-insensitive.",
+    )
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def normalize_query(cls, v: object) -> object:
+        if not isinstance(v, str):
+            return v
+        return v.strip()
+
+
 def _digits_only(value: str) -> str:
     return "".join(filter(str.isdigit, value))

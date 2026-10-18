@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "langchain-core>=1.6.12",
     "pydantic[email]>=2.14.1",
 ]
 
