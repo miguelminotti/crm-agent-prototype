@@ -29,3 +29,6 @@ dev = [
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
