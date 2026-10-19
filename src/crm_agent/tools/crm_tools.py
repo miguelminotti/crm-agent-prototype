@@ -1,5 +1,5 @@
 from uuid import UUID
-
+from crm_agent.crm.errors import CompanyNotFoundError
 from langchain_core.tools import BaseTool, tool
 
 from crm_agent.crm.repository import CRMRepository
@@ -27,10 +27,13 @@ def make_crm_tools(repo: CRMRepository) -> list[BaseTool]:
     ) -> str:
         """Create a new contact with the given name, optional phone, email, and associated company ID. 
         Use this tool when the user asks to create a new contact on the CRM or when trying to associate a contact with a company."""
-        contact = repo.create_contact(
-            name=name, phone=phone, email=email, company_id=company_id
-        )
-        return f"Contact created with ID {contact.id}."
+        try:
+            contact = repo.create_contact(
+                name=name, phone=phone, email=email, company_id=company_id
+            )
+            return f"Contact created with ID {contact.id}."
+        except CompanyNotFoundError as e:
+            return f"Error creating contact: {str(e)}."
 
     @tool(args_schema=FindCompaniesInput)
     def find_companies(query: str) -> str:
