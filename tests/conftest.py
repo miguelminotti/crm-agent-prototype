@@ -12,7 +12,7 @@ def repo() -> InMemoryCRMRepository:
 
 @pytest.fixture
 def crm_tools(repo: InMemoryCRMRepository) -> list[BaseTool]:
-    return [t for t in make_crm_tools(repo)]
+    return make_crm_tools(repo)
 
 
 @pytest.fixture
