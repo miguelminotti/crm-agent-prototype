@@ -6,11 +6,6 @@ from crm_agent.crm.errors import CompanyNotFoundError, DuplicateCompanyError
 from crm_agent.crm.repository import CRMRepository, InMemoryCRMRepository
 
 
-@pytest.fixture
-def in_memory_crm_repository() -> InMemoryCRMRepository:
-    return InMemoryCRMRepository()
-
-
 # Static checks to ensure the repository implementation satisfies the protocol
 def test_in_memory_crm_repository_satisfies_protocol() -> None:
     repo: CRMRepository = InMemoryCRMRepository()
