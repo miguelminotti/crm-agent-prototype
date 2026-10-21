@@ -10,9 +10,7 @@ from pydantic import ValidationError
 from crm_agent.crm.repository import InMemoryCRMRepository
 
 
-def test_create_company_with_formatted_cnpj(
-    repo: InMemoryCRMRepository, crm_tools_dict: dict[str, BaseTool]
-) -> None:
+def test_create_company_with_formatted_cnpj(repo: InMemoryCRMRepository, crm_tools_dict: dict[str, BaseTool]) -> None:
     create_company_tool = crm_tools_dict["create_company"]
     input_data = {"name": "Acme LTDA", "cnpj": "12.345.678/0001-95"}
     result = create_company_tool.invoke(input_data)
@@ -58,9 +56,7 @@ def test_create_and_find_company_and_create_contact(
     input_data_find = {"query": "Acme LTDA"}
     result_find = find_companies_tool.invoke(input_data_find)
     result_find_json = json.loads(result_find)
-    assert any(
-        company["company_id"] == company_id for company in result_find_json["companies"]
-    )
+    assert any(company["company_id"] == company_id for company in result_find_json["companies"])
 
     # Create a contact with the found company ID
     input_data_contact = {

@@ -26,9 +26,7 @@ def make_crm_tools(repo: CRMRepository) -> list[BaseTool]:
         except CRMError as e:
             return json.dumps({"error": str(e)}, ensure_ascii=False)
         else:
-            return json.dumps(
-                _get_company_serializable_dict(company), ensure_ascii=False
-            )
+            return json.dumps(_get_company_serializable_dict(company), ensure_ascii=False)
 
     @tool(args_schema=CreateContactInput)
     def create_contact(
@@ -45,9 +43,7 @@ def make_crm_tools(repo: CRMRepository) -> list[BaseTool]:
         use `find_companies` before when the user mentions a company.
         """
         try:
-            contact = repo.create_contact(
-                name=name, phone=phone, email=email, company_id=company_id
-            )
+            contact = repo.create_contact(name=name, phone=phone, email=email, company_id=company_id)
         except CRMError as e:
             return json.dumps({"error": str(e)}, ensure_ascii=False)
         else:
@@ -56,9 +52,7 @@ def make_crm_tools(repo: CRMRepository) -> list[BaseTool]:
                 "name": contact.name,
                 "phone": contact.phone,
                 "email": contact.email,
-                "company_id": str(contact.company_id)
-                if contact.company_id is not None
-                else None,
+                "company_id": str(contact.company_id) if contact.company_id is not None else None,
                 "created_at": contact.created_at.isoformat(),
             }
             return json.dumps(result, ensure_ascii=False)
@@ -72,11 +66,7 @@ def make_crm_tools(repo: CRMRepository) -> list[BaseTool]:
         call `find_companies` first when the user mentions a company.
         """
         companies = repo.find_companies(query=query)
-        result = {
-            "companies": [
-                _get_company_serializable_dict(company) for company in companies
-            ]
-        }
+        result = {"companies": [_get_company_serializable_dict(company) for company in companies]}
 
         return json.dumps(result, ensure_ascii=False)
 

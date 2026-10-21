@@ -1,6 +1,5 @@
 import json
 from collections.abc import Sequence
-from uuid import uuid4
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -11,9 +10,7 @@ from crm_agent.agent.manual_loop import run_agent
 from crm_agent.crm.repository import InMemoryCRMRepository
 
 
-def test_run_agent_with_fake_model(
-    repo: InMemoryCRMRepository, crm_tools: Sequence[BaseTool]
-) -> None:
+def test_run_agent_with_fake_model(repo: InMemoryCRMRepository, crm_tools: Sequence[BaseTool]) -> None:
     # Turn 0. "Cadastra a Maria da Acme" - Human
     # Turn 1. tool_calls - find_companies - AIMessage
     # Turn 2. content JSON with 'Acme' company - ToolMessage
@@ -64,9 +61,7 @@ def test_run_agent_with_fake_model(
         AIMessage,
     ]
     history_types_list = [type(msg) for msg in history]
-    assert history_types_list == expected_types_list, (
-        "Message type sequence does not match expected sequence"
-    )
+    assert history_types_list == expected_types_list, "Message type sequence does not match expected sequence"
     if isinstance(history[4].content, str):
         json_result = json.loads(str(history[4].content))
         assert json_result["company_id"] == str(acme_company.id)
@@ -102,12 +97,12 @@ def test_run_agent_with_missing_tool(crm_tools: Sequence[BaseTool]) -> None:
         AIMessage,
     ]
     history_types_list = [type(msg) for msg in history]
-    assert history_types_list == expected_types_list, (
-        "Message type sequence does not match expected sequence"
+    assert history_types_list == expected_types_list, "Message type sequence does not match expected sequence"
+    history_tool_message = history[2]
+    assert isinstance(history_tool_message, ToolMessage) and history_tool_message.status == "error", (
+        "Expected a ToolMessage with error status."
     )
-    for msg in history:
-        if isinstance(msg, ToolMessage) and msg.status == "error":
-            assert msg.tool_call_id == "c1", "Expected tool call ID to be 'c1'."
+    assert history_tool_message.tool_call_id == "c1", "Expected tool call ID to be 'c1'."
 
 
 def test_run_agent_with_validation_error_tool(crm_tools: Sequence[BaseTool]) -> None:
@@ -120,7 +115,6 @@ def test_run_agent_with_validation_error_tool(crm_tools: Sequence[BaseTool]) -> 
                     name="create_contact",
                     args={
                         "name": "",  # Invalid value to trigger validation error
-                        "company_id": str(uuid4()),
                     },
                     id="c1",
                 )
@@ -130,9 +124,7 @@ def test_run_agent_with_validation_error_tool(crm_tools: Sequence[BaseTool]) -> 
     ]
     fake = FakeMessagesListChatModel(responses=fake_messages)
 
-    history: Sequence[BaseMessage] = [
-        HumanMessage(content="Try to create a contact with invalid data")
-    ]
+    history: Sequence[BaseMessage] = [HumanMessage(content="Try to create a contact with invalid data")]
     history = run_agent(fake, crm_tools, history)
 
     # Assert
@@ -143,9 +135,9 @@ def test_run_agent_with_validation_error_tool(crm_tools: Sequence[BaseTool]) -> 
         AIMessage,
     ]
     history_types_list = [type(msg) for msg in history]
-    assert history_types_list == expected_types_list, (
-        "Message type sequence does not match expected sequence"
+    assert history_types_list == expected_types_list, "Message type sequence does not match expected sequence"
+    history_tool_message = history[2]
+    assert isinstance(history_tool_message, ToolMessage) and history_tool_message.status == "error", (
+        "Expected a ToolMessage with error status."
     )
-    for msg in history:
-        if isinstance(msg, ToolMessage) and msg.status == "error":
-            assert msg.tool_call_id == "c1", "Expected tool call ID to be 'c1'."
+    assert history_tool_message.tool_call_id == "c1", "Expected tool call ID to be 'c1'."

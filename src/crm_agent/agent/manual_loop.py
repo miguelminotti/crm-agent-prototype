@@ -41,18 +41,17 @@ def run_agent(
         history.append(answer)
 
         for tool_call in answer.tool_calls:
+            if tool_call["id"] is None:
+                raise ValueError("Tool call ID cannot be None.")
             tool = tools_dict.get(tool_call["name"])
             if tool is not None:
-                if isinstance(tool_call["id"], str):
-                    raise ValueError("Tool call ID cannot be None.")
-
                 try:
                     tool_use_message: ToolMessage = tool.invoke(tool_call)
                 except ValidationError as e:
+                    errors_str = ", ".join(f"{err['msg']} - {err['loc']}" for err in e.errors(include_url=False))
                     error_tool_message = ToolMessage(
                         tool_call_id=tool_call["id"],
-                        content=f"Validation error: "
-                        f"{e.errors(include_url=False)[0]['msg']}",
+                        content=f"Validation error: {errors_str}",
                         status="error",
                     )
                     history.append(error_tool_message)
@@ -61,8 +60,7 @@ def run_agent(
             else:
                 error_tool_message = ToolMessage(
                     tool_call_id=tool_call["id"],
-                    content=f"Tool '{tool_call['name']}' not found. "
-                    f"Available tools: {list(tools_dict)}",
+                    content=f"Tool '{tool_call['name']}' not found. Available tools: {list(tools_dict)}",
                     status="error",
                 )
                 history.append(error_tool_message)

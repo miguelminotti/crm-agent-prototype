@@ -59,6 +59,5 @@ class InMemoryCRMRepository:
         return [
             c
             for c in self._companies.values()
-            if query.casefold() in c.name.casefold()
-            or (c.cnpj is not None and query in c.cnpj)
+            if query.casefold() in c.name.casefold() or (c.cnpj is not None and query in c.cnpj)
         ]
