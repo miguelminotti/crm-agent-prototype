@@ -8,8 +8,9 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.messages.tool import tool_call
 from langchain_core.messages.utils import AnyMessage
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
 
 from crm_agent.agent.graph import build_graph
@@ -167,3 +168,114 @@ def test_run_graph_with_forever_asking_for_tools_loop(crm_tools: Sequence[BaseTo
     graph = build_graph(fake, crm_tools)
     with pytest.raises(GraphRecursionError):
         graph.invoke({"messages": history}, {"recursion_limit": 20})
+
+
+# Test memory between turns
+# On thread "t1":
+# Turn 1 (Human): "oi"
+# Turn 1 (AI): "Olá, tudo bem?"
+# Turn 2 (Human): "cadastra a Acme LTDA"
+# Turn 2 (AI): tool - create_company
+# Turn 2 (Tool message): create_company with args {"name": "Acme LTDA"}
+# Turn 2 (AI): "Empresa Acme LTDA cadastrada com sucesso"
+# Rules:
+# `invoke` receives only the new message and the memory should retain previous context
+def test_memory_between_turns(crm_tools: Sequence[BaseTool]) -> None:
+    # Arrange
+    fake_messages: Sequence[AIMessage] = [
+        AIMessage(content="Olá, tudo bem?"),
+        AIMessage(
+            content="",
+            tool_calls=[
+                tool_call(
+                    name="create_company",
+                    args={
+                        "name": "Acme LTDA",
+                    },
+                    id="c1",
+                )
+            ],
+        ),
+        AIMessage(content="Empresa Acme LTDA cadastrada com sucesso"),
+    ]
+    fake = FakeMessagesListChatModelBindedTools(responses=fake_messages)
+
+    # Act & Assert
+    graph = build_graph(fake, crm_tools, checkpointer=InMemorySaver())
+
+    config: RunnableConfig = {"configurable": {"thread_id": "t1"}, "recursion_limit": 20}
+
+    result = graph.invoke({"messages": [HumanMessage(content="oi")]}, config)
+    result_messages = result["messages"]
+    assert isinstance(result_messages[-1], AIMessage)
+    assert result_messages[-1].content == "Olá, tudo bem?"
+
+    result = graph.invoke({"messages": [HumanMessage(content="cadastra a Acme LTDA")]}, config)
+    result_messages = result["messages"]
+    assert isinstance(result_messages[-2], ToolMessage)
+    assert result_messages[-2].status == "success"
+    assert isinstance(result_messages[-1], AIMessage)
+    assert result_messages[-1].content == "Empresa Acme LTDA cadastrada com sucesso"
+
+    expected_types_list = [HumanMessage, AIMessage, HumanMessage, AIMessage, ToolMessage, AIMessage]
+    actual_types_list = [type(msg) for msg in result_messages]
+    assert actual_types_list == expected_types_list
+
+
+def test_thread_isolation(crm_tools: Sequence[BaseTool]) -> None:
+    # Arrange
+    ai_message = AIMessage(content="Olá, tudo bem?")
+    fake_messages: Sequence[AIMessage] = [
+        ai_message,
+    ]
+    fake = FakeMessagesListChatModelBindedTools(responses=fake_messages)
+
+    graph = build_graph(fake, crm_tools, checkpointer=InMemorySaver())
+
+    config_t1: RunnableConfig = {"configurable": {"thread_id": "t1"}, "recursion_limit": 20}
+
+    result_t1 = graph.invoke({"messages": [HumanMessage(content="oi")]}, config_t1)
+
+    assert result_t1["messages"][-1].content == "Olá, tudo bem?"
+
+    config_t2: RunnableConfig = {"configurable": {"thread_id": "t2"}, "recursion_limit": 20}
+
+    human_message_t2 = HumanMessage(content="bom dia")
+
+    result_t2 = graph.invoke({"messages": [human_message_t2]}, config_t2)
+
+    assert result_t2["messages"][-1] == ai_message
+    assert result_t2["messages"][-2] == human_message_t2
+
+
+def test_recursion_limit_preservation(crm_tools: Sequence[BaseTool]) -> None:
+    # Arrange
+    fake_messages: Sequence[AIMessage] = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                tool_call(
+                    name="create_contact",
+                    args={
+                        "name": "John Doe",
+                    },
+                    id="c1",
+                )
+            ],
+        )
+        for _ in range(100)
+    ]
+    fake = FakeMessagesListChatModelBindedTools(responses=fake_messages)
+
+    graph = build_graph(fake, crm_tools, checkpointer=InMemorySaver())
+
+    config: RunnableConfig = {"configurable": {"thread_id": "t1"}, "recursion_limit": 6}
+
+    # Act
+    with pytest.raises(GraphRecursionError):
+        graph.invoke({"messages": [HumanMessage(content="oi")]}, config)
+        graph_state = graph.get_state(config)
+        assert graph_state is not None
+        assert "messages" in graph_state.values
+        assert len(graph_state.values["messages"]) > 0
+        assert graph_state.next == ("model",)
