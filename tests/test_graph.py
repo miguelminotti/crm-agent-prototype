@@ -12,6 +12,7 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
+from langgraph.types import Command
 
 from crm_agent.agent.graph import build_graph
 from crm_agent.crm.repository import InMemoryCRMRepository
@@ -279,3 +280,83 @@ def test_recursion_limit_preservation(crm_tools: Sequence[BaseTool]) -> None:
         assert "messages" in graph_state.values
         assert len(graph_state.values["messages"]) > 0
         assert graph_state.next == ("model",)
+
+
+def test_readonly_tool_no_interrupt(crm_tools: Sequence[BaseTool]) -> None:
+    # Arrange
+    human_message = HumanMessage(content="Encontre a empresa Acme")
+
+    fake_messages: Sequence[AIMessage] = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                tool_call(
+                    name="find_companies",
+                    args={
+                        "query": "Acme",
+                    },
+                    id="c1",
+                )
+            ],
+        ),
+        AIMessage(
+            content="Não encontrei a empresa Acme",
+        ),
+    ]
+    fake = FakeMessagesListChatModelBindedTools(responses=fake_messages)
+
+    graph = build_graph(fake, crm_tools, checkpointer=InMemorySaver())
+
+    config: RunnableConfig = {"configurable": {"thread_id": "t1"}, "recursion_limit": 20}
+
+    # Act
+    result = graph.invoke({"messages": [human_message]}, config)
+
+    # Assert
+    result_messages = result["messages"]
+    expected_types_list = [HumanMessage, AIMessage, ToolMessage, AIMessage]
+    actual_types_list = [type(msg) for msg in result_messages]
+    assert actual_types_list == expected_types_list
+    assert "__interrupt__" not in result
+
+
+# Test write tools triggers interrupt and only saves after approval
+def test_write_tool_triggers_interrupt(repo: InMemoryCRMRepository, crm_tools: Sequence[BaseTool]) -> None:
+    # Arrange
+    human_message = HumanMessage(content="Crie a empresa Acme")
+
+    fake_messages: Sequence[AIMessage] = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                tool_call(
+                    name="create_company",
+                    args={
+                        "name": "Acme",
+                    },
+                    id="c1",
+                )
+            ],
+        ),
+        AIMessage(
+            content="Empresa cadastrada com sucesso",
+        ),
+    ]
+    fake = FakeMessagesListChatModelBindedTools(responses=fake_messages)
+
+    graph = build_graph(
+        fake, crm_tools, checkpointer=InMemorySaver(), approval_required_tools=["create_company", "create_contact"]
+    )
+
+    config: RunnableConfig = {"configurable": {"thread_id": "t1"}, "recursion_limit": 20}
+
+    # Act
+    result = graph.invoke({"messages": [human_message]}, config)
+    assert graph.get_state(config).next == ("approval",)
+
+    # Assert
+    assert "__interrupt__" in result  # Result
+
+    result_after_approval = graph.invoke(Command(resume="sim"), config)
+    assert "__interrupt__" not in result_after_approval
+    assert repo.find_companies(query="Acme") != []

@@ -12,6 +12,9 @@ from crm_agent.tools.schemas import (
     FindCompaniesInput,
 )
 
+WRITE_TOOLS = ["create_company", "create_contact"]
+READ_TOOLS = ["find_companies"]
+
 
 def make_crm_tools(repo: CRMRepository) -> list[BaseTool]:
     @tool(args_schema=CreateCompanyInput)
