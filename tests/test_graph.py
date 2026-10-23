@@ -305,7 +305,9 @@ def test_readonly_tool_no_interrupt(crm_tools: Sequence[BaseTool]) -> None:
     ]
     fake = FakeMessagesListChatModelBindedTools(responses=fake_messages)
 
-    graph = build_graph(fake, crm_tools, checkpointer=InMemorySaver())
+    graph = build_graph(
+        fake, crm_tools, checkpointer=InMemorySaver(), approval_required_tools=["create_company", "create_contact"]
+    )
 
     config: RunnableConfig = {"configurable": {"thread_id": "t1"}, "recursion_limit": 20}
 
@@ -350,13 +352,70 @@ def test_write_tool_triggers_interrupt(repo: InMemoryCRMRepository, crm_tools: S
 
     config: RunnableConfig = {"configurable": {"thread_id": "t1"}, "recursion_limit": 20}
 
-    # Act
+    # Act & Assert
     result = graph.invoke({"messages": [human_message]}, config)
+
+    assert repo.find_companies(query="Acme") == []
+
     assert graph.get_state(config).next == ("approval",)
 
-    # Assert
     assert "__interrupt__" in result  # Result
 
     result_after_approval = graph.invoke(Command(resume="sim"), config)
     assert "__interrupt__" not in result_after_approval
     assert repo.find_companies(query="Acme") != []
+
+
+# Test rejected write tool create_company
+# The company should not exist in the repo after the rejection
+# The ToolMessage should have status="error" and the correct tool_call_id
+# The final type sequence should be [HumanMessage, AIMessage, ToolMessage, AIMessage]
+@pytest.mark.parametrize("resume_value", ["talvez", "maybe", "unexpected"])
+def test_rejected_write_tool_create_company(
+    repo: InMemoryCRMRepository, crm_tools: Sequence[BaseTool], resume_value: str
+) -> None:
+    # Arrange
+    human_message = HumanMessage(content="Crie a empresa Acme")
+    fake_messages: Sequence[AIMessage] = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                tool_call(
+                    name="create_company",
+                    args={
+                        "name": "Acme",
+                    },
+                    id="c1",
+                )
+            ],
+        ),
+        AIMessage(
+            content="O que quer mudar?",
+        ),
+    ]
+    fake = FakeMessagesListChatModelBindedTools(responses=fake_messages)
+
+    graph = build_graph(
+        fake, crm_tools, checkpointer=InMemorySaver(), approval_required_tools=["create_company", "create_contact"]
+    )
+
+    config: RunnableConfig = {"configurable": {"thread_id": "t1"}, "recursion_limit": 20}
+
+    # Act & Assert
+    result = graph.invoke({"messages": [human_message]}, config)
+
+    assert repo.find_companies(query="Acme") == []  # Guarantee that the company has not been created yet
+
+    assert graph.get_state(config).next == ("approval",)
+
+    assert "__interrupt__" in result  # Result
+
+    result_after_rejection = graph.invoke(Command(resume=resume_value), config)
+
+    assert "__interrupt__" not in result_after_rejection
+    assert repo.find_companies(query="Acme") == []  # Guarantee that the company has not been created after rejection
+
+    second_last_message = result_after_rejection["messages"][-2]
+    assert isinstance(second_last_message, ToolMessage)
+    assert second_last_message.status == "error"
+    assert second_last_message.tool_call_id == "c1"

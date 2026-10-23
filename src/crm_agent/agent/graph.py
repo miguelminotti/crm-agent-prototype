@@ -1,13 +1,14 @@
 from collections.abc import Sequence
+from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 
 
 def build_graph(
@@ -41,31 +42,49 @@ def build_graph(
         model_answer: AIMessage | None = (
             state["messages"][-1] if state["messages"] and isinstance(state["messages"][-1], AIMessage) else None
         )
-        if model_answer is None or not model_answer.tool_calls: # TODO: fix the multiple tool_calls scenario
+        if model_answer is None or not model_answer.tool_calls:
             return END
         elif approval_required_tools is None or all(
             call["name"] not in approval_required_tools for call in model_answer.tool_calls
         ):
             return "tools"
-        elif approval_required_tools is not None and all(
+        elif approval_required_tools is not None and any(
             call["name"] in approval_required_tools for call in model_answer.tool_calls
         ):
             return "approval"
         else:
             return "tools"
 
-    def approval_node(state: MessagesState) -> dict[str, list[BaseMessage]]:
+    def approval_node(state: MessagesState) -> Command[Literal["tools", "model"]]:
         model_answer: AIMessage | None = (
             state["messages"][-1] if state["messages"] and isinstance(state["messages"][-1], AIMessage) else None
         )
         tool_calls = model_answer.tool_calls if model_answer else []
         tool_calls_str = ", ".join(f"{call['name']}: {call['args']}" for call in tool_calls)
-        interrupt(
+        decision = interrupt(
             {
                 "question": f"Você aprova essa escrita no CRM? {tool_calls_str}",
             }
         )
-        return {}
+        if decision == "sim":
+            return Command(goto="tools")
+
+        tool_rejection_list: list[ToolMessage] = []
+
+        for call in tool_calls:
+            if call["id"] is not None:
+                tool_rejection_list.append(
+                    ToolMessage(
+                        content=f"Rejeitado pelo usuário: tool: "
+                        f"{call['name']}, args: {call['args']}, id: {str(call['id'])}",
+                        tool_call_id=str(call["id"]),
+                        status="error",
+                    )
+                )
+            else:
+                raise ValueError("Tool call ID is None")
+
+        return Command(goto="model", update={"messages": tool_rejection_list})
 
     builder = StateGraph(MessagesState)
     builder.add_node("model", model_node)
@@ -73,7 +92,6 @@ def build_graph(
     builder.add_node("tools", ToolNode(tools))
     builder.add_node("approval", approval_node)
     builder.add_conditional_edges("model", route_node)
-    builder.add_edge("approval", "tools")
     builder.add_edge("tools", "model")
 
     graph = builder.compile(checkpointer=checkpointer)
