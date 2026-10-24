@@ -1,8 +1,9 @@
 """
 Dataset for evaluating the CRM agent interactions.
 
-`tools_called` and `must_not_call` are used to specify which tools should or should not be called during
-the evaluation. Both means "equals", i.e., the tool must be called exactly as specified.
+- `tools_called` and `must_not_call` are used to specify which tools should or should not be called during
+the evaluation. `tools_called` means "equals", i.e., the tool must be called exactly as specified.
+- "c-<index>" is used as an alias for the seeded company in the dataset.
 """
 
 from typing import Any
