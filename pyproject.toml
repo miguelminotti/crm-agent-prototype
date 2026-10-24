@@ -8,13 +8,14 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "langchain-anthropic>=1.7.6",
     "langchain-core>=1.6.12",
     "langgraph>=1.2.16",
     "pydantic[email]>=2.14.1",
 ]
 
 [project.scripts]
-crm-agent = "crm_agent:main"
+crm-agent = "crm_agent.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]

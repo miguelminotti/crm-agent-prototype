@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -10,11 +10,18 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 
+DEFAULT_SYSTEM_PROMPT = (
+    "Você é um operador de CRM. Você responde em português (Brasil). "
+    "Você sempre busca antes de criar. Pergunta quando houver ambiguidade ou dúvida. Nunca inventa IDs. "
+    "Não peça confirmação dom usuário em pedidos claros."
+)
+
 
 def build_graph(
     model: BaseChatModel,
     tools: Sequence[BaseTool],
     *,
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     checkpointer: BaseCheckpointSaver[str] | None = None,
     approval_required_tools: Sequence[str] | None = None,
 ) -> CompiledStateGraph[MessagesState]:
@@ -24,7 +31,8 @@ def build_graph(
     Args:
         model (BaseChatModel): The chat model to use for the agent.
         tools (Sequence[BaseTool]): A sequence of tools available to the agent.
-        checkpoint (BaseCheckpointSaver[str] | None, optional): The checkpoint saver to use for the graph compilation.
+        system_prompt (str): The system prompt to prepend to the model's messages.
+        checkpointer (BaseCheckpointSaver[str] | None, optional): The checkpoint saver to use for the graph compilation.
         Defaults to None.
 
     Returns:
@@ -35,7 +43,7 @@ def build_graph(
     runnable = model.bind_tools(tools)
 
     def model_node(state: MessagesState) -> dict[str, list[BaseMessage]]:
-        answer = runnable.invoke(state["messages"])
+        answer = runnable.invoke([SystemMessage(system_prompt), *state["messages"]])
         return {"messages": [answer]}
 
     def route_node(state: MessagesState) -> str:
