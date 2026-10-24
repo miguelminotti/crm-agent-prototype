@@ -26,4 +26,5 @@ if __name__ == "__main__":
         experiment_prefix="baseline",
         metadata={"model": "claude-haiku-5-5", "prompt": "v1"},
         max_concurrency=2,
+        num_repetitions=3
     )
