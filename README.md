@@ -15,6 +15,7 @@ Work in progress. What exists today:
 - ✅ A hand-written agent loop (`manual_loop.py`), tested with a fake chat model
 - ✅ The same agent expressed as a LangGraph `StateGraph` (`graph.py`), with human approval before writing to the CRM
 - ✅ A terminal chat (`cli.py`) running the graph against a real Claude model, traced with LangSmith
+- ✅ Offline evaluations in LangSmith: a scenario dataset, a target that runs the real agent, and unit-tested evaluators (`evals/`)
 
 Planned next (see [Roadmap](#roadmap)):
 
@@ -119,7 +120,54 @@ These are the choices I would highlight when walking through the code.
 
 **A manual loop before LangGraph.** `manual_loop.py` implements the agent loop by hand, including a `max_iterations` guard that raises `MaxIterationsReachedError`. It exists to make the mechanics explicit (tool call IDs, message ordering, error messages). `graph.py` then expresses the same loop with LangGraph's `StateGraph`, `ToolNode` and `tools_condition`.
 
-**Deterministic tests without an API key.** The agent loop is tested with LangChain's `FakeMessagesListChatModel`, which replays a scripted list of `AIMessage`s. This tests the loop logic, not the model's reasoning.
+**Deterministic tests without an API key.** The agent loop is tested with LangChain's `FakeMessagesListChatModel`, which replays a scripted list of `AIMessage`s. This tests the loop logic, not the model's reasoning. The model's reasoning is measured separately, with [evaluations](#evaluations).
+
+## Evaluations
+
+Unit tests prove the loop works; they can't tell whether the real model makes good decisions (search before creating, don't guess IDs, don't create a company nobody asked for). That is what `evals/` measures, using a LangSmith experiment.
+
+```mermaid
+flowchart LR
+    D[dataset.py<br/>scenarios] -->|inputs| T[target.py<br/>run_agent]
+    T -->|outputs| E[evaluators.py]
+    D -->|reference_outputs| E
+    E -->|scores + comments| LS[LangSmith experiment]
+```
+
+**Dataset** (`dataset.py`). Each scenario has a user message, an optional `seed` (companies that already exist in the CRM) and the expected result:
+
+| # | Scenario | Expected behavior |
+|---|----------|-------------------|
+| 1 | `formatted_cnpj` | Searches, then creates the company with the CNPJ normalized to digits |
+| 2 | `link_to_existent_company` | Finds the seeded company and links the new contact to it |
+| 3 | `link_to_nonexistent_company` | Searches, finds nothing and creates neither the contact nor the company |
+| 4 | `ambiguous_company_link` | Two companies match "Acme": searches and asks instead of picking one |
+| 5 | `duplicated_cnpj` | The CNPJ already exists: does not create the company again |
+| 6 | `readonly_query` | Only searches; nothing is written |
+
+Every scenario declares all four expected keys (`companies_created`, `contacts_created`, `tools_called`, `must_not_call`), with an explicit `[]` when nothing should happen. A missing key would force the evaluator to guess, and scoring "nothing to check" as a pass inflates the average.
+
+**Target** (`target.py`). `run_agent(inputs)` builds everything from scratch for each run: a fresh in-memory CRM with the seed applied, the real Claude model, and the same graph as the CLI. It uses a new `thread_id` on every call (LangSmith runs scenarios in parallel and repeats them), approves every interrupt automatically, and returns a JSON-serializable dict:
+
+| Key | Content |
+|-----|---------|
+| `answer` | The model's final text |
+| `tools_called` | Tool names in call order, read from the `AIMessage.tool_calls` |
+| `interrupts` | How many approvals were requested |
+| `companies_created`, `contacts_created` | Only what the agent created (a snapshot taken before `invoke` excludes the seed) |
+
+The dataset refers to seeded companies by aliases like `"c-1"`, while the repository generates UUIDs, so the target translates the `company_id` of created contacts back to the alias.
+
+**Evaluators** (`evaluators.py`). Plain functions with no LLM calls, so they're tested with pytest in [tests/test_evaluators.py](tests/test_evaluators.py). LangSmith injects `outputs` and `reference_outputs` by parameter name. Each one returns a score and a comment showing what came out versus what was expected, which appears next to the score in the LangSmith UI.
+
+| Evaluator | Passes when |
+|-----------|-------------|
+| `companies_match` | `companies_created` equals the expected list |
+| `contacts_match` | `contacts_created` equals the expected list |
+| `tools_match` | `tools_called` equals the expected list exactly (same tools, same order, no repeats) |
+| `no_forbidden_tools` | No tool from `must_not_call` was called |
+
+**Running an experiment** (`run.py`). It uploads the dataset to LangSmith the first time (it is skipped if a dataset named `crm-agent` already exists), then calls `client.evaluate` with the target, the four evaluators and metadata identifying the model and the prompt version, so experiments can be compared later.
 
 ## Project structure
 
@@ -133,16 +181,23 @@ src/crm_agent/
 │   ├── schemas.py       # Pydantic input schemas and normalizers
 │   └── crm_tools.py     # make_crm_tools(repo) -> list[BaseTool]
 ├── agent/
+│   ├── chat_models.py   # build_chat_anthropic_model()
 │   ├── manual_loop.py   # hand-written model <-> tools loop
 │   └── graph.py         # same loop as a LangGraph StateGraph (+ approval node)
 └── cli.py               # terminal chat with a real Claude model
+evals/
+├── dataset.py           # evaluation scenarios
+├── target.py            # run_agent(inputs): runs the real agent for one scenario
+├── evaluators.py        # scoring functions
+└── run.py               # uploads the dataset and runs a LangSmith experiment
 tests/
 ├── conftest.py          # repo and tools fixtures
 ├── test_repository.py
 ├── test_schemas.py
 ├── test_crm_tools.py
 ├── test_manual_loop.py
-└── test_graph.py
+├── test_graph.py
+└── test_evaluators.py
 ```
 
 ## Getting started
@@ -160,7 +215,7 @@ Run the checks:
 ```bash
 uv run pytest
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src tests evals
 ```
 
 ### Chat with the agent in the terminal
@@ -177,7 +232,7 @@ The tests use a fake model. To talk to the agent with a real model, use the CLI.
    |----------|----------|---------|
    | `ANTHROPIC_API_KEY` | Yes | Calls the Claude model |
    | `LANGSMITH_TRACING` | No | Set to `true` to send traces to LangSmith |
-   | `LANGSMITH_API_KEY` | Only with tracing | LangSmith key |
+   | `LANGSMITH_API_KEY` | For tracing and evals | LangSmith key |
    | `LANGSMITH_PROJECT` | No | LangSmith project the traces go to |
 
 2. Start the chat. The project doesn't load `.env` by itself, so pass it to `uv`:
@@ -198,13 +253,31 @@ Empresa Acme cadastrada!
 
 The model's replies vary between runs. All data lives in memory, so the CRM starts empty every time the CLI starts.
 
+### Run the evaluations
+
+These commands call the real model and need `ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY` in `.env`.
+
+Run a single scenario locally and print the target's output (the number is the scenario's position in the dataset, 1 to 6):
+
+```bash
+uv run --env-file .env python -m evals.target 2
+```
+
+Run the full experiment in LangSmith:
+
+```bash
+uv run --env-file .env python -m evals.run
+```
+
+Each scenario takes about three model calls, and `run.py` repeats every scenario `num_repetitions` times, so keep an eye on the cost. The dataset is only uploaded when it doesn't exist yet: after editing `dataset.py`, delete the `crm-agent` dataset in LangSmith (or rename `DATASET_NAME`) so the changes are uploaded. When you change the model or the prompt, update the `metadata` in `run.py` too.
+
 ## Tech stack
 
 - **Python 3.13**, managed with **uv**
 - **langchain-core**: messages, `BaseChatModel`, `@tool`
 - **langgraph**: `StateGraph`, `MessagesState`, `ToolNode`, `interrupt`, `InMemorySaver`
 - **langchain-anthropic**: `ChatAnthropic` for the CLI
-- **LangSmith**: optional tracing
+- **LangSmith**: tracing, datasets and experiments (`Client.evaluate`)
 - **pydantic v2**: tool input schemas and validation
 - **pytest**, **ruff**, **mypy** (`strict = true`)
 
@@ -230,6 +303,7 @@ flowchart LR
 - [x] Tests for the LangGraph version
 - [x] Human approval before write tools run
 - [x] Terminal chat (CLI) with LangSmith tracing
+- [x] Offline evaluations with LangSmith (dataset, target, evaluators, experiment)
 - [ ] Update tools (e.g. change a contact's email or company)
 
 **2. Backend**
