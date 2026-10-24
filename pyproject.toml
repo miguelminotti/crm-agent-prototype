@@ -32,6 +32,9 @@ dev = [
 strict = true
 plugins = ["pydantic.mypy"]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.ruff]
 line-length = 120
 

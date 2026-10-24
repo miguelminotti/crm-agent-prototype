@@ -4,6 +4,8 @@ Dataset for evaluating the CRM agent interactions.
 - `tools_called` and `must_not_call` are used to specify which tools should or should not be called during
 the evaluation. `tools_called` means "equals", i.e., the tool must be called exactly as specified.
 - "c-<index>" is used as an alias for the seeded company in the dataset.
+- Every scenario declares all `reference_outputs` keys, with an explicit `[]` when nothing is expected,
+so evaluators never have to guess what a missing key means.
 """
 
 from typing import Any
@@ -16,7 +18,9 @@ CRM_AGENT_EVAL_DATASET: list[dict[str, Any]] = [
         "inputs": {"message": "Crie a empresa Acme com CNPJ 12.345.678/0001-90"},
         "reference_outputs": {
             "companies_created": [{"name": "Acme", "cnpj": "12345678000190"}],
+            "contacts_created": [],
             "tools_called": ["find_companies", "create_company"],
+            "must_not_call": ["create_contact"],
         },
     },
     {
@@ -28,8 +32,10 @@ CRM_AGENT_EVAL_DATASET: list[dict[str, Any]] = [
             "seed": {"companies": [{"id": "c-1", "name": "Acme", "cnpj": "12345678000190"}]},
         },
         "reference_outputs": {
+            "companies_created": [],
             "contacts_created": [{"name": "João da Silva", "email": "joao@acme.com", "company_id": "c-1"}],
             "tools_called": ["find_companies", "create_contact"],
+            "must_not_call": ["create_company"],
         },
     },
     {
@@ -38,6 +44,7 @@ CRM_AGENT_EVAL_DATASET: list[dict[str, Any]] = [
         "metadata": {"scenario": "link_to_nonexistent_company"},
         "inputs": {"message": "Crie o contato Maria Oliveira com email maria@globex.com e vincule à empresa Globex"},
         "reference_outputs": {
+            "companies_created": [],
             "contacts_created": [],
             "tools_called": ["find_companies"],
             "must_not_call": ["create_contact", "create_company"],
@@ -57,6 +64,7 @@ CRM_AGENT_EVAL_DATASET: list[dict[str, Any]] = [
             },
         },
         "reference_outputs": {
+            "companies_created": [],
             "contacts_created": [],
             "tools_called": ["find_companies"],
             "must_not_call": ["create_contact"],
@@ -72,6 +80,7 @@ CRM_AGENT_EVAL_DATASET: list[dict[str, Any]] = [
         },
         "reference_outputs": {
             "companies_created": [],
+            "contacts_created": [],
             "tools_called": ["find_companies"],
             "must_not_call": ["create_company", "create_contact"],
         },
@@ -92,6 +101,7 @@ CRM_AGENT_EVAL_DATASET: list[dict[str, Any]] = [
         },
         "reference_outputs": {
             "companies_created": [],
+            "contacts_created": [],
             "tools_called": ["find_companies"],
             "must_not_call": ["create_company", "create_contact"],
         },
