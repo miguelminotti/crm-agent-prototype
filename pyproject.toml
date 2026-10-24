@@ -11,6 +11,7 @@ dependencies = [
     "langchain-anthropic>=1.7.6",
     "langchain-core>=1.6.12",
     "langgraph>=1.2.16",
+    "langsmith>=0.14.11",
     "pydantic[email]>=2.14.1",
 ]
 
