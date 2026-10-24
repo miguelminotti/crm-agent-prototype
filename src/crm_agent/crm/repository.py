@@ -25,6 +25,10 @@ class CRMRepository(Protocol):
 
     def find_companies(self, *, query: str) -> list[Company]: ...
 
+    def list_companies(self) -> list[Company]: ...
+
+    def list_contacts(self) -> list[Contact]: ...
+
 
 class InMemoryCRMRepository:
     def __init__(self) -> None:
@@ -61,3 +65,9 @@ class InMemoryCRMRepository:
             for c in self._companies.values()
             if query.casefold() in c.name.casefold() or (c.cnpj is not None and query in c.cnpj)
         ]
+
+    def list_companies(self) -> list[Company]:
+        return list(self._companies.values())
+
+    def list_contacts(self) -> list[Contact]:
+        return list(self._contacts.values())
