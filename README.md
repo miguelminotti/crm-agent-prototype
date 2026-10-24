@@ -16,10 +16,11 @@ Work in progress. What exists today:
 - ✅ The agent rebuilt as a LangGraph `StateGraph` (`graph.py`), which adds a system prompt, a checkpointer and human approval before writing to the CRM
 - ✅ A terminal chat (`cli.py`) running the graph against a real Claude model, traced with LangSmith
 - ✅ Offline evaluations in LangSmith: a scenario dataset, a target that runs the real agent, and unit-tested evaluators (`evals/`)
+- ✅ A FastAPI endpoint to chat with the agent per thread (`api.py`), which reports pending approvals
 
 Planned next (see [Roadmap](#roadmap)):
 
-- ⏳ FastAPI backend serving the agent and the CRM data
+- ⏳ Approve or reject pending writes through the API, and endpoints to read the CRM data
 - ⏳ PostgreSQL repository replacing the in-memory one
 - ⏳ Next.js + React chat frontend that shows records being created and updated live
 
@@ -158,16 +159,17 @@ Every scenario declares all four expected keys (`companies_created`, `contacts_c
 
 The dataset refers to seeded companies by aliases like `"c-1"`, while the repository generates UUIDs, so the target translates the `company_id` of created contacts back to the alias.
 
-**Evaluators** (`evaluators.py`). Plain functions with no LLM calls, so they're tested with pytest in [tests/test_evaluators.py](tests/test_evaluators.py). LangSmith injects `outputs` and `reference_outputs` by parameter name. Each one returns a score and a comment showing what came out versus what was expected, which appears next to the score in the LangSmith UI.
+**Evaluators** (`evaluators.py`). Plain functions with no LLM calls, so they're tested with pytest in [tests/test_evaluators.py](tests/test_evaluators.py). LangSmith injects `outputs` and `reference_outputs` by parameter name. Each one returns a score and a comment, which appears next to the score in the LangSmith UI; the pass/fail ones show what came out versus what was expected.
 
-| Evaluator | Passes when |
-|-----------|-------------|
-| `companies_match` | `companies_created` equals the expected list |
-| `contacts_match` | `contacts_created` equals the expected list |
-| `tools_match` | `tools_called` equals the expected list exactly (same tools, same order, no repeats) |
-| `no_forbidden_tools` | No tool from `must_not_call` was called |
+| Evaluator | Score |
+|-----------|-------|
+| `companies_match` | Pass when `companies_created` equals the expected list |
+| `contacts_match` | Pass when `contacts_created` equals the expected list |
+| `tools_match` | Pass when the expected tools appear in `tools_called` in the same order; repeats and other tools in between are allowed (ordered subsequence) |
+| `no_forbidden_tools` | Pass when no tool from `must_not_call` was called |
+| `tool_call_count` | Not pass/fail: the number of tool calls, to compare how efficient the agent is between experiments |
 
-**Running an experiment** (`run.py`). It uploads the dataset to LangSmith the first time (it is skipped if a dataset named `crm-agent` already exists), then calls `client.evaluate` with the target, the four evaluators and metadata identifying the model and the prompt version, so experiments can be compared later.
+**Running an experiment** (`run.py`). It uploads the dataset to LangSmith the first time (it is skipped if a dataset named `crm-agent` already exists), then calls `client.evaluate` with the target, the evaluators above and metadata identifying the model and the prompt version, so experiments can be compared later.
 
 ## Project structure
 
@@ -184,6 +186,7 @@ src/crm_agent/
 │   ├── chat_models.py   # build_chat_anthropic_model()
 │   ├── manual_loop.py   # hand-written model <-> tools loop
 │   └── graph.py         # LangGraph StateGraph with system prompt and approval node
+├── api.py               # FastAPI app: POST /threads/{thread_id}/messages
 └── cli.py               # terminal chat with a real Claude model
 evals/
 ├── dataset.py           # evaluation scenarios
@@ -197,7 +200,8 @@ tests/
 ├── test_crm_tools.py
 ├── test_manual_loop.py
 ├── test_graph.py
-└── test_evaluators.py
+├── test_evaluators.py
+└── test_api.py          # TestClient with the graph dependency overridden by a fake model
 ```
 
 ## Getting started
@@ -253,6 +257,28 @@ Empresa Acme cadastrada!
 
 The model's replies vary between runs. All data lives in memory, so the CRM starts empty every time the CLI starts.
 
+### Run the API
+
+Uses the same `.env` as the CLI:
+
+```bash
+uv run --env-file .env fastapi dev src/crm_agent/api.py
+```
+
+The interactive docs (Swagger) are at `http://127.0.0.1:8000/docs`. There is a single endpoint, `POST /threads/{thread_id}/messages`:
+
+```jsonc
+// Request body
+{"message": "Crie a empresa Acme"}
+
+// Response
+{"answer": "...", "pending_approval": "Você aprova essa escrita no CRM? create_company: {'name': 'Acme'}"}
+```
+
+`pending_approval` is the interrupt's question when the agent wants to write to the CRM, or `null` otherwise. Approving or rejecting through the API is not implemented yet, so a write stays pending.
+
+The graph, the repository and the checkpointer are built once (`get_graph` is wrapped in `@cache`) and shared by every request. Building them per request would lose the conversation and the CRM data between messages. Requests with a body missing `message` get a `422` from FastAPI's validation.
+
 ### Run the evaluations
 
 These commands call the real model and need `ANTHROPIC_API_KEY` and `LANGSMITH_API_KEY` in `.env`.
@@ -276,7 +302,8 @@ Each scenario takes about three model calls, and `run.py` repeats every scenario
 - **Python 3.13**, managed with **uv**
 - **langchain-core**: messages, `BaseChatModel`, `@tool`
 - **langgraph**: `StateGraph`, `MessagesState`, `ToolNode`, `interrupt`, `InMemorySaver`
-- **langchain-anthropic**: `ChatAnthropic` for the CLI
+- **langchain-anthropic**: `ChatAnthropic` for the CLI, the API and the evals
+- **FastAPI**: HTTP API, `Depends` for the graph, `TestClient` in the tests
 - **LangSmith**: tracing, datasets and experiments (`Client.evaluate`)
 - **pydantic v2**: tool input schemas and validation
 - **pytest**, **ruff**, **mypy** (`strict = true`)
@@ -295,7 +322,7 @@ flowchart LR
     RP --> DB[(PostgreSQL)]
 ```
 
-**1. Agent core** (current)
+**1. Agent core**
 - [x] Domain, repository Protocol and in-memory implementation
 - [x] Tools with Pydantic schemas
 - [x] Manual agent loop + LangGraph version
@@ -306,8 +333,9 @@ flowchart LR
 - [x] Offline evaluations with LangSmith (dataset, target, evaluators, experiment)
 - [ ] Update tools (e.g. change a contact's email or company)
 
-**2. Backend**
-- [ ] FastAPI app exposing a chat endpoint for the agent
+**2. Backend** (current)
+- [x] FastAPI app exposing a chat endpoint for the agent
+- [ ] Approve or reject pending writes through the API
 - [ ] Endpoints to read companies and contacts
 - [ ] PostgreSQL implementation of `CRMRepository`
 

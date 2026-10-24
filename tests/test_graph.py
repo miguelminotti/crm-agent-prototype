@@ -1,14 +1,12 @@
 import json
 from collections.abc import Sequence
-from typing import Any
 
 import pytest
-from langchain_core.language_models import LanguageModelInput
-from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from conftest import FakeMessagesListChatModelBindedTools
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.messages.tool import tool_call
 from langchain_core.messages.utils import AnyMessage
-from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
@@ -16,15 +14,6 @@ from langgraph.types import Command
 
 from crm_agent.agent.graph import build_graph
 from crm_agent.crm.repository import InMemoryCRMRepository
-
-
-class FakeMessagesListChatModelBindedTools(FakeMessagesListChatModel):
-    def bind_tools(
-        self,
-        tools: Sequence[Any],
-        **kwargs: Any,
-    ) -> Runnable[LanguageModelInput, AIMessage]:
-        return self
 
 
 def test_run_graph_with_fake_model(repo: InMemoryCRMRepository, crm_tools: Sequence[BaseTool]) -> None:
