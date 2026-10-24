@@ -22,7 +22,9 @@ def contacts_match(outputs: dict[str, Any], reference_outputs: dict[str, Any]) -
 def tools_match(outputs: dict[str, Any], reference_outputs: dict[str, Any]) -> dict[str, Any]:
     got = outputs["tools_called"]
     expected = reference_outputs["tools_called"]
-    return {"key": "tools_match", "score": got == expected, "comment": f"got: {got}, expected: {expected}"}
+    it = iter(got)
+    ok = all(tool in it for tool in expected)
+    return {"key": "tools_match", "score": ok, "comment": f"got: {got}, expected: {expected}"}
 
 
 def no_forbidden_tools(outputs: dict[str, Any], reference_outputs: dict[str, Any]) -> dict[str, Any]:
@@ -31,4 +33,13 @@ def no_forbidden_tools(outputs: dict[str, Any], reference_outputs: dict[str, Any
         "key": "no_forbidden_tools",
         "score": not forbidden_called,
         "comment": f"forbidden tools called: {forbidden_called}",
+    }
+
+
+def tool_call_count(outputs: dict[str, Any]) -> dict[str, Any]:
+    count = len(outputs["tools_called"])
+    return {
+        "key": "tool_call_count",
+        "score": count,
+        "comment": f"tools called count: {count}",
     }

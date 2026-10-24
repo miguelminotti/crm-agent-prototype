@@ -2,7 +2,8 @@
 Dataset for evaluating the CRM agent interactions.
 
 - `tools_called` and `must_not_call` are used to specify which tools should or should not be called during
-the evaluation. `tools_called` means "equals", i.e., the tool must be called exactly as specified.
+the evaluation. `tools_called` means sorted subsequence, i.e., the tools must be called in the specified order,
+but other tools can appear in between.
 - "c-<index>" is used as an alias for the seeded company in the dataset.
 - Every scenario declares all `reference_outputs` keys, with an explicit `[]` when nothing is expected,
 so evaluators never have to guess what a missing key means.

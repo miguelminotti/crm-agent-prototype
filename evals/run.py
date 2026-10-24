@@ -1,7 +1,7 @@
 from langsmith import Client
 
 from evals.dataset import CRM_AGENT_EVAL_DATASET
-from evals.evaluators import companies_match, contacts_match, no_forbidden_tools, tools_match
+from evals.evaluators import companies_match, contacts_match, no_forbidden_tools, tool_call_count, tools_match
 from evals.target import run_agent
 
 DATASET_NAME = "crm-agent"
@@ -22,9 +22,9 @@ if __name__ == "__main__":
     client.evaluate(
         run_agent,
         data=DATASET_NAME,
-        evaluators=[companies_match, contacts_match, tools_match, no_forbidden_tools],
+        evaluators=[companies_match, contacts_match, tools_match, no_forbidden_tools, tool_call_count],
         experiment_prefix="baseline",
         metadata={"model": "claude-haiku-5-5", "prompt": "v1"},
         max_concurrency=2,
-        num_repetitions=3
+        num_repetitions=3,
     )

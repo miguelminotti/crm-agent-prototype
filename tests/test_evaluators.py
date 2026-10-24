@@ -64,10 +64,19 @@ def test_tools_match_fails_when_find_is_skipped() -> None:
     assert "find_companies" in result["comment"]
 
 
-def test_tools_match_fails_when_a_tool_is_repeated() -> None:
+def test_tools_match_passes_when_a_tool_is_repeated() -> None:
     outputs = {**OUTPUTS, "tools_called": ["find_companies", "find_companies", "create_contact"]}
 
-    assert tools_match(outputs, REFERENCE_OUTPUTS)["score"] is False
+    assert tools_match(outputs, REFERENCE_OUTPUTS)["score"] is True
+
+
+def test_tools_match_fails_when_writing_tool_before_finding_company() -> None:
+    outputs = {**OUTPUTS, "tools_called": ["create_contact", "find_companies"]}
+
+    result = tools_match(outputs, REFERENCE_OUTPUTS)
+
+    assert result["score"] is False
+    assert "find_companies" in result["comment"]
 
 
 def test_no_forbidden_tools_passes() -> None:
