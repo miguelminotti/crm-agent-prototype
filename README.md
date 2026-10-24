@@ -13,11 +13,11 @@ Work in progress. What exists today:
 - ✅ CRM domain (companies and contacts) with an in-memory repository
 - ✅ Three LangChain tools with Pydantic input schemas and input normalization
 - ✅ A hand-written agent loop (`manual_loop.py`), tested with a fake chat model
-- ✅ The same agent expressed as a LangGraph `StateGraph` (`graph.py`)
+- ✅ The same agent expressed as a LangGraph `StateGraph` (`graph.py`), with human approval before writing to the CRM
+- ✅ A terminal chat (`cli.py`) running the graph against a real Claude model, traced with LangSmith
 
 Planned next (see [Roadmap](#roadmap)):
 
-- ⏳ Connect a real LLM provider
 - ⏳ FastAPI backend serving the agent and the CRM data
 - ⏳ PostgreSQL repository replacing the in-memory one
 - ⏳ Next.js + React chat frontend that shows records being created and updated live
@@ -83,10 +83,15 @@ The LangGraph version models the same loop as a graph:
 ```mermaid
 flowchart LR
     START --> model
-    model -->|has tool calls| tools
+    model -->|read-only tool calls| tools
+    model -->|write tool calls| approval
     model -->|no tool calls| END
+    approval -->|approved| tools
+    approval -->|rejected| model
     tools --> model
 ```
+
+The `approval` node only exists when `build_graph` receives `approval_required_tools`. It pauses the graph with LangGraph's `interrupt()`, which requires a checkpointer. If the user rejects, each pending tool call gets a `ToolMessage` with `status="error"` and the model decides what to do next.
 
 ### Available tools
 
@@ -127,15 +132,17 @@ src/crm_agent/
 ├── tools/
 │   ├── schemas.py       # Pydantic input schemas and normalizers
 │   └── crm_tools.py     # make_crm_tools(repo) -> list[BaseTool]
-└── agent/
-    ├── manual_loop.py   # hand-written model <-> tools loop
-    └── graph.py         # same loop as a LangGraph StateGraph
+├── agent/
+│   ├── manual_loop.py   # hand-written model <-> tools loop
+│   └── graph.py         # same loop as a LangGraph StateGraph (+ approval node)
+└── cli.py               # terminal chat with a real Claude model
 tests/
 ├── conftest.py          # repo and tools fixtures
 ├── test_repository.py
 ├── test_schemas.py
 ├── test_crm_tools.py
-└── test_manual_loop.py
+├── test_manual_loop.py
+└── test_graph.py
 ```
 
 ## Getting started
@@ -156,11 +163,48 @@ uv run ruff check .
 uv run mypy src tests
 ```
 
+### Chat with the agent in the terminal
+
+The tests use a fake model. To talk to the agent with a real model, use the CLI. It runs the LangGraph version with Claude (`claude-haiku-5-5` through `ChatAnthropic`), an in-memory CRM and an in-memory checkpointer.
+
+1. Copy `.env.example` to `.env` and fill in your keys:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   | Variable | Required | Purpose |
+   |----------|----------|---------|
+   | `ANTHROPIC_API_KEY` | Yes | Calls the Claude model |
+   | `LANGSMITH_TRACING` | No | Set to `true` to send traces to LangSmith |
+   | `LANGSMITH_API_KEY` | Only with tracing | LangSmith key |
+   | `LANGSMITH_PROJECT` | No | LangSmith project the traces go to |
+
+2. Start the chat. The project doesn't load `.env` by itself, so pass it to `uv`:
+
+   ```bash
+   uv run --env-file .env crm-agent
+   ```
+
+The CLI talks in Portuguese. Type your requests at the `Você:` prompt and `sair` (or `exit` / `quit`) to leave. Before running `create_company` or `create_contact`, the agent pauses and asks for approval; answer `s`/`sim` to approve, anything else rejects the write:
+
+```text
+Você: Cadastre a empresa Acme com CNPJ 12.345.678/0001-95
+Você aprova essa escrita no CRM? create_company: {'name': 'Acme', 'cnpj': '12.345.678/0001-95'}
+s/n?
+Você: s
+Empresa Acme cadastrada!
+```
+
+The model's replies vary between runs. All data lives in memory, so the CRM starts empty every time the CLI starts.
+
 ## Tech stack
 
 - **Python 3.13**, managed with **uv**
 - **langchain-core**: messages, `BaseChatModel`, `@tool`
-- **langgraph**: `StateGraph`, `MessagesState`, `ToolNode`
+- **langgraph**: `StateGraph`, `MessagesState`, `ToolNode`, `interrupt`, `InMemorySaver`
+- **langchain-anthropic**: `ChatAnthropic` for the CLI
+- **LangSmith**: optional tracing
 - **pydantic v2**: tool input schemas and validation
 - **pytest**, **ruff**, **mypy** (`strict = true`)
 
@@ -182,9 +226,11 @@ flowchart LR
 - [x] Domain, repository Protocol and in-memory implementation
 - [x] Tools with Pydantic schemas
 - [x] Manual agent loop + LangGraph version
+- [x] Connect a real chat model with tool-calling support
+- [x] Tests for the LangGraph version
+- [x] Human approval before write tools run
+- [x] Terminal chat (CLI) with LangSmith tracing
 - [ ] Update tools (e.g. change a contact's email or company)
-- [ ] Connect a real chat model with tool-calling support
-- [ ] Tests for the LangGraph version
 
 **2. Backend**
 - [ ] FastAPI app exposing a chat endpoint for the agent
