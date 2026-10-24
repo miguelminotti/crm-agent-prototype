@@ -13,7 +13,7 @@ Work in progress. What exists today:
 - ✅ CRM domain (companies and contacts) with an in-memory repository
 - ✅ Three LangChain tools with Pydantic input schemas and input normalization
 - ✅ A hand-written agent loop (`manual_loop.py`), tested with a fake chat model
-- ✅ The same agent expressed as a LangGraph `StateGraph` (`graph.py`), with human approval before writing to the CRM
+- ✅ The agent rebuilt as a LangGraph `StateGraph` (`graph.py`), which adds a system prompt, a checkpointer and human approval before writing to the CRM
 - ✅ A terminal chat (`cli.py`) running the graph against a real Claude model, traced with LangSmith
 - ✅ Offline evaluations in LangSmith: a scenario dataset, a target that runs the real agent, and unit-tested evaluators (`evals/`)
 
@@ -60,7 +60,7 @@ flowchart TD
 
 ### The agent loop
 
-Both agent implementations do the same thing:
+Both agent implementations share the same core loop:
 
 1. Send the message history to the model.
 2. If the model answers with `tool_calls`, execute each tool and append a `ToolMessage` with the result.
@@ -79,7 +79,7 @@ Example run for "Add Maria from Acme":
 
 This message sequence is asserted in [tests/test_manual_loop.py](tests/test_manual_loop.py) (the test uses the same prompt in Portuguese).
 
-The LangGraph version models the same loop as a graph:
+The LangGraph version models that loop as a graph and goes further: a write tool call passes through an `approval` node first.
 
 ```mermaid
 flowchart LR
@@ -118,7 +118,7 @@ These are the choices I would highlight when walking through the code.
 - *Business errors* (`CRMError`, e.g. duplicate CNPJ, unknown company) are caught inside the tool and returned to the model as `{"error": "..."}`, so the model can explain the problem or try something else.
 - *Invalid arguments* (`ValidationError`) and *unknown tool names* are caught by the agent loop and turned into a `ToolMessage` with `status="error"`, so a bad tool call does not crash the conversation.
 
-**A manual loop before LangGraph.** `manual_loop.py` implements the agent loop by hand, including a `max_iterations` guard that raises `MaxIterationsReachedError`. It exists to make the mechanics explicit (tool call IDs, message ordering, error messages). `graph.py` then expresses the same loop with LangGraph's `StateGraph`, `ToolNode` and `tools_condition`.
+**A manual loop before LangGraph.** `manual_loop.py` implements the agent loop by hand, including a `max_iterations` guard that raises `MaxIterationsReachedError`. It exists to make the mechanics explicit (tool call IDs, message ordering, error messages). `graph.py` then rebuilds the loop with LangGraph's `StateGraph` and `ToolNode`, plus what the manual loop doesn't have: a system prompt, a checkpointer for conversation memory, and a custom router that sends write tool calls to the `approval` node. The manual loop stays as it was, as a reference for the basic mechanics; the CLI and the evals use the graph.
 
 **Deterministic tests without an API key.** The agent loop is tested with LangChain's `FakeMessagesListChatModel`, which replays a scripted list of `AIMessage`s. This tests the loop logic, not the model's reasoning. The model's reasoning is measured separately, with [evaluations](#evaluations).
 
@@ -183,7 +183,7 @@ src/crm_agent/
 ├── agent/
 │   ├── chat_models.py   # build_chat_anthropic_model()
 │   ├── manual_loop.py   # hand-written model <-> tools loop
-│   └── graph.py         # same loop as a LangGraph StateGraph (+ approval node)
+│   └── graph.py         # LangGraph StateGraph with system prompt and approval node
 └── cli.py               # terminal chat with a real Claude model
 evals/
 ├── dataset.py           # evaluation scenarios
