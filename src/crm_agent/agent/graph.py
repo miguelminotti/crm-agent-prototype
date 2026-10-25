@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
@@ -9,6 +9,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
+from pydantic import TypeAdapter
 
 DEFAULT_SYSTEM_PROMPT = (
     "Você é um operador de CRM. Você responde em português (Brasil). "
@@ -16,6 +17,24 @@ DEFAULT_SYSTEM_PROMPT = (
     "Não peça confirmação do usuário em pedidos claros. Se a empresa envolvendo o pedido não existir, você "
     "deve informar ao usuário que a empresa não existe."
 )
+
+
+class ApprovalDecision(TypedDict):
+    approved: bool
+    reason: NotRequired[str | None]
+
+
+APPROVAL_DECISION_ADAPTER = TypeAdapter(ApprovalDecision)
+
+
+class PendingToolCall(TypedDict):
+    name: str
+    args: dict[str, Any]
+    id: str | None
+
+
+class InterruptPayload(TypedDict):
+    tool_calls: list[PendingToolCall]
 
 
 def build_graph(
@@ -34,7 +53,10 @@ def build_graph(
         tools (Sequence[BaseTool]): A sequence of tools available to the agent.
         system_prompt (str): The system prompt to prepend to the model's messages.
         checkpointer (BaseCheckpointSaver[str] | None, optional): The checkpoint saver to use for the graph compilation.
-        Defaults to None.
+            Defaults to None.
+        approval_required_tools (Sequence[str] | None, optional): A sequence of tool names that require approval
+        before execution.
+            Defaults to None.
 
     Returns:
         CompiledStateGraph[MessagesState]: The graph representation of the agent's interactions.
@@ -69,13 +91,14 @@ def build_graph(
             state["messages"][-1] if state["messages"] and isinstance(state["messages"][-1], AIMessage) else None
         )
         tool_calls = model_answer.tool_calls if model_answer else []
-        tool_calls_str = ", ".join(f"{call['name']}: {call['args']}" for call in tool_calls)
-        decision = interrupt(
-            {
-                "question": f"Você aprova essa escrita no CRM? {tool_calls_str}",
-            }
+
+        raw_decision = interrupt(
+            InterruptPayload(
+                tool_calls=[PendingToolCall(name=call["name"], args=call["args"], id=call["id"]) for call in tool_calls]
+            )
         )
-        if decision == "sim":
+        decision = APPROVAL_DECISION_ADAPTER.validate_python(raw_decision)
+        if decision["approved"]:
             return Command(goto="tools")
 
         tool_rejection_list: list[ToolMessage] = []
@@ -85,7 +108,8 @@ def build_graph(
                 tool_rejection_list.append(
                     ToolMessage(
                         content=f"Rejeitado pelo usuário: tool: "
-                        f"{call['name']}, args: {call['args']}, id: {str(call['id'])}",
+                        f"{call['name']}, args: {call['args']}, id: {str(call['id'])}.\n"
+                        f"Motivo: {'Nenhum motivo fornecido' if decision['reason'] is None else decision['reason']}",
                         tool_call_id=str(call["id"]),
                         status="error",
                     )

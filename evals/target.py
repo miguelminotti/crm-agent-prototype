@@ -9,7 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from crm_agent.agent.chat_models import build_chat_anthropic_model
-from crm_agent.agent.graph import build_graph
+from crm_agent.agent.graph import ApprovalDecision, build_graph
 from crm_agent.crm.repository import InMemoryCRMRepository
 from crm_agent.tools.crm_tools import make_crm_tools
 from evals.dataset import CRM_AGENT_EVAL_DATASET
@@ -40,7 +40,8 @@ def run_agent(inputs: dict[str, Any]) -> dict[str, Any]:
     interrupts = 0
     while "__interrupt__" in result:
         interrupts += 1
-        result = graph.invoke(Command(resume="sim"), config)
+        approval = ApprovalDecision(approved=True, reason=None)
+        result = graph.invoke(Command(resume=approval), config)
 
     tools_called = []
     for message in result["messages"]:
