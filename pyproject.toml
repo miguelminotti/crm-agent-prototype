@@ -32,6 +32,7 @@ dev = [
 
 [tool.mypy]
 strict = true
+warn_unreachable = true
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
