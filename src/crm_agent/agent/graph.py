@@ -3,6 +3,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -65,8 +66,13 @@ def build_graph(
     # Bind tools
     runnable = model.bind_tools(tools)
 
+    # Two versions of the same node: `invoke` (CLI, evals) uses the sync one, `ainvoke` (API) uses the async one
     def model_node(state: MessagesState) -> dict[str, list[BaseMessage]]:
         answer = runnable.invoke([SystemMessage(system_prompt), *state["messages"]])
+        return {"messages": [answer]}
+
+    async def amodel_node(state: MessagesState) -> dict[str, list[BaseMessage]]:
+        answer = await runnable.ainvoke([SystemMessage(system_prompt), *state["messages"]])
         return {"messages": [answer]}
 
     def route_node(state: MessagesState) -> str:
@@ -120,7 +126,7 @@ def build_graph(
         return Command(goto="model", update={"messages": tool_rejection_list})
 
     builder = StateGraph(MessagesState)
-    builder.add_node("model", model_node)
+    builder.add_node("model", RunnableLambda(model_node, afunc=amodel_node))
     builder.add_edge(START, "model")
     builder.add_node("tools", ToolNode(tools))
     builder.add_node("approval", approval_node)

@@ -1,3 +1,4 @@
+import asyncio
 from functools import cache
 from typing import Annotated, Any
 
@@ -42,6 +43,9 @@ class ApprovalDecisionRequest(BaseModel):
     reason: str | None = None
 
 
+_thread_locks: dict[str, asyncio.Lock] = {}
+
+
 # Cached: built once and shared by every request, so the repo and the checkpointer (memory) survive between requests
 @cache
 def get_graph() -> CompiledStateGraph[MessagesState]:
@@ -55,32 +59,44 @@ def get_graph() -> CompiledStateGraph[MessagesState]:
 
 
 @app.post("/threads/{thread_id}/messages")
-def create_message(
+async def create_message(
     thread_id: str,
     body: MessageRequest,
     graph: Annotated[CompiledStateGraph[MessagesState], Depends(get_graph)],
 ) -> MessageResponse:
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}, "recursion_limit": 20}
-    result = graph.invoke({"messages": [HumanMessage(content=body.message)]}, config)
-    return _to_response(result)
+    lock = _acquire_thread_lock_or_409(thread_id)
+
+    async with lock:
+        config: RunnableConfig = {"configurable": {"thread_id": thread_id}, "recursion_limit": 20}
+        state: StateSnapshot = await graph.aget_state(config)
+        if state.interrupts:
+            raise HTTPException(status_code=409, detail="Pending approval for this thread")
+
+        result = await graph.ainvoke({"messages": [HumanMessage(content=body.message)]}, config)
+        return _to_response(result)
 
 
 @app.post("/threads/{thread_id}/approval")
-def approve_message(
+async def approve_message(
     thread_id: str,
     body: ApprovalDecisionRequest,
     graph: Annotated[CompiledStateGraph[MessagesState], Depends(get_graph)],
 ) -> MessageResponse:
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}, "recursion_limit": 20}
-    state: StateSnapshot = graph.get_state(config)
-    if state.created_at is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
-    
-    if not state.interrupts:
-        raise HTTPException(status_code=409, detail="No pending approval for this thread")
+    lock = _acquire_thread_lock_or_409(thread_id)
 
-    result = graph.invoke(Command(resume=ApprovalDecision(approved=body.approved, reason=body.reason)), config)
-    return _to_response(result)
+    async with lock:
+        config: RunnableConfig = {"configurable": {"thread_id": thread_id}, "recursion_limit": 20}
+        state: StateSnapshot = await graph.aget_state(config)
+        if state.created_at is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        if not state.interrupts:
+            raise HTTPException(status_code=409, detail="No pending approval for this thread")
+
+        result = await graph.ainvoke(
+            Command(resume=ApprovalDecision(approved=body.approved, reason=body.reason)), config
+        )
+        return _to_response(result)
 
 
 def _to_response(result: dict[str, Any] | Any) -> MessageResponse:
@@ -90,3 +106,11 @@ def _to_response(result: dict[str, Any] | Any) -> MessageResponse:
     )
     answer = None if interrupt_present else result["messages"][-1].text
     return MessageResponse(answer=answer, pending_approval=pending_approval)
+
+
+def _acquire_thread_lock_or_409(thread_id: str) -> asyncio.Lock:
+    if thread_id not in _thread_locks:
+        _thread_locks[thread_id] = asyncio.Lock()
+    elif _thread_locks[thread_id].locked():
+        raise HTTPException(status_code=409, detail="Thread is currently locked")
+    return _thread_locks[thread_id]
