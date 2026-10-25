@@ -16,11 +16,11 @@ Work in progress. What exists today:
 - ✅ The agent rebuilt as a LangGraph `StateGraph` (`graph.py`), which adds a system prompt, a checkpointer and human approval before writing to the CRM
 - ✅ A terminal chat (`cli.py`) running the graph against a real Claude model, traced with LangSmith
 - ✅ Offline evaluations in LangSmith: a scenario dataset, a target that runs the real agent, and unit-tested evaluators (`evals/`)
-- ✅ A FastAPI endpoint to chat with the agent per thread (`api.py`), which reports pending approvals
+- ✅ A FastAPI app (`api.py`) to chat with the agent per thread and approve or reject its writes (human-in-the-loop)
 
 Planned next (see [Roadmap](#roadmap)):
 
-- ⏳ Approve or reject pending writes through the API, and endpoints to read the CRM data
+- ⏳ Endpoints to read the CRM data
 - ⏳ PostgreSQL repository replacing the in-memory one
 - ⏳ Next.js + React chat frontend that shows records being created and updated live
 
@@ -93,7 +93,16 @@ flowchart LR
     tools --> model
 ```
 
-The `approval` node only exists when `build_graph` receives `approval_required_tools`. It pauses the graph with LangGraph's `interrupt()`, which requires a checkpointer. If the user rejects, each pending tool call gets a `ToolMessage` with `status="error"` and the model decides what to do next.
+The `approval` node only exists when `build_graph` receives `approval_required_tools`. It pauses the graph with LangGraph's `interrupt()`, which requires a checkpointer.
+
+The pause and the answer are structured data, not free text, so the CLI and the API can both drive it:
+
+| Direction | Type (in `graph.py`) | Shape |
+|-----------|----------------------|-------|
+| Graph → caller (interrupt payload) | `InterruptPayload` | `{"tool_calls": [{"name": "create_company", "args": {"name": "Acme"}, "id": "c1"}]}` |
+| Caller → graph (`Command(resume=...)`) | `ApprovalDecision` | `{"approved": false, "reason": "Nome errado"}` |
+
+The decision is validated with a Pydantic `TypeAdapter`, so a resume without `approved` raises `ValidationError` instead of being read as a rejection. `reason` is a required key, but it can be `None`. If the user rejects, each pending tool call gets a `ToolMessage` with `status="error"` that includes the reason (or "Nenhum motivo fornecido"), and the model decides what to do next, for example asking what to change.
 
 ### Available tools
 
@@ -186,7 +195,7 @@ src/crm_agent/
 │   ├── chat_models.py   # build_chat_anthropic_model()
 │   ├── manual_loop.py   # hand-written model <-> tools loop
 │   └── graph.py         # LangGraph StateGraph with system prompt and approval node
-├── api.py               # FastAPI app: POST /threads/{thread_id}/messages
+├── api.py               # FastAPI app: /threads/{thread_id}/messages and /approval
 └── cli.py               # terminal chat with a real Claude model
 evals/
 ├── dataset.py           # evaluation scenarios
@@ -245,14 +254,18 @@ The tests use a fake model. To talk to the agent with a real model, use the CLI.
    uv run --env-file .env crm-agent
    ```
 
-The CLI talks in Portuguese. Type your requests at the `Você:` prompt and `sair` (or `exit` / `quit`) to leave. Before running `create_company` or `create_contact`, the agent pauses and asks for approval; answer `s`/`sim` to approve, anything else rejects the write:
+The CLI talks in Portuguese. Type your requests at the `Você:` prompt and `sair` (or `exit` / `quit`) to leave. Before running `create_company` or `create_contact`, the agent pauses and lists the tool calls it wants to make. Answer `s`/`sim` to approve; anything else rejects the write and asks for an optional reason, which is passed on to the model:
 
 ```text
 Você: Cadastre a empresa Acme com CNPJ 12.345.678/0001-95
-Você aprova essa escrita no CRM? create_company: {'name': 'Acme', 'cnpj': '12.345.678/0001-95'}
+Pergunta do sistema: Você aprova essas operações no CRM?
+Chamada de ferramenta 1:
+  Nome: create_company
+  Argumentos: {'name': 'Acme', 'cnpj': '12.345.678/0001-95'}
 s/n?
-Você: s
-Empresa Acme cadastrada!
+Você: n
+Motivo da rejeição: O nome é Acme LTDA
+Entendido! Quer que eu cadastre como Acme LTDA?
 ```
 
 The model's replies vary between runs. All data lives in memory, so the CRM starts empty every time the CLI starts.
@@ -265,17 +278,24 @@ Uses the same `.env` as the CLI:
 uv run --env-file .env fastapi dev src/crm_agent/api.py
 ```
 
-The interactive docs (Swagger) are at `http://127.0.0.1:8000/docs`. There is a single endpoint, `POST /threads/{thread_id}/messages`:
+The interactive docs (Swagger) are at `http://127.0.0.1:8000/docs`. There are two endpoints, and both return the same response shape:
+
+| Endpoint | Body | Does |
+|----------|------|------|
+| `POST /threads/{thread_id}/messages` | `{"message": "..."}` | Sends a user message to the agent |
+| `POST /threads/{thread_id}/approval` | `{"approved": true}` or `{"approved": false, "reason": "..."}` | Resumes a paused thread with the user's decision (`reason` is optional) |
+
+When the agent wants to write to the CRM, the response has no `answer` yet and `pending_approval` lists the tool calls waiting for a decision:
 
 ```jsonc
-// Request body
-{"message": "Crie a empresa Acme"}
+// POST /threads/t1/messages  {"message": "Crie a empresa Acme"}
+{"answer": null, "pending_approval": {"tool_calls": [{"name": "create_company", "args": {"name": "Acme"}, "id": "toolu_..."}]}}
 
-// Response
-{"answer": "...", "pending_approval": "Você aprova essa escrita no CRM? create_company: {'name': 'Acme'}"}
+// POST /threads/t1/approval  {"approved": true}
+{"answer": "Empresa Acme cadastrada!", "pending_approval": null}
 ```
 
-`pending_approval` is the interrupt's question when the agent wants to write to the CRM, or `null` otherwise. Approving or rejecting through the API is not implemented yet, so a write stays pending.
+Otherwise `answer` has the model's reply and `pending_approval` is `null`.
 
 The graph, the repository and the checkpointer are built once (`get_graph` is wrapped in `@cache`) and shared by every request. Building them per request would lose the conversation and the CRM data between messages. Requests with a body missing `message` get a `422` from FastAPI's validation.
 
@@ -335,7 +355,7 @@ flowchart LR
 
 **2. Backend** (current)
 - [x] FastAPI app exposing a chat endpoint for the agent
-- [ ] Approve or reject pending writes through the API
+- [x] Approve or reject pending writes through the API, with a structured interrupt payload and decision
 - [ ] Endpoints to read companies and contacts
 - [ ] PostgreSQL implementation of `CRMRepository`
 
