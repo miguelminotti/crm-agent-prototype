@@ -1,5 +1,6 @@
 """CRM repository protocol definition."""
 
+import threading
 from typing import Protocol
 from uuid import UUID
 
@@ -34,13 +35,15 @@ class InMemoryCRMRepository:
     def __init__(self) -> None:
         self._companies: dict[UUID, Company] = {}
         self._contacts: dict[UUID, Contact] = {}
+        self._lock = threading.Lock()
 
     def create_company(self, *, name: str, cnpj: str | None = None) -> Company:
-        if cnpj is not None and any(c.cnpj == cnpj for c in self._companies.values()):
-            raise DuplicateCompanyError(f"Company with CNPJ {cnpj} already exists.")
-        company = Company(name=name, cnpj=cnpj)
-        self._companies[company.id] = company
-        return company
+        with self._lock:
+            if cnpj is not None and any(c.cnpj == cnpj for c in self._companies.values()):
+                raise DuplicateCompanyError(f"Company with CNPJ {cnpj} already exists.")
+            company = Company(name=name, cnpj=cnpj)
+            self._companies[company.id] = company
+            return company
 
     def create_contact(
         self,
@@ -50,11 +53,12 @@ class InMemoryCRMRepository:
         phone: str | None = None,
         company_id: UUID | None = None,
     ) -> Contact:
-        if company_id is not None and company_id not in self._companies:
-            raise CompanyNotFoundError(f"Company with ID {company_id} not found.")
-        contact = Contact(name=name, email=email, phone=phone, company_id=company_id)
-        self._contacts[contact.id] = contact
-        return contact
+        with self._lock:
+            if company_id is not None and company_id not in self._companies:
+                raise CompanyNotFoundError(f"Company with ID {company_id} not found.")
+            contact = Contact(name=name, email=email, phone=phone, company_id=company_id)
+            self._contacts[contact.id] = contact
+            return contact
 
     def get_company(self, *, company_id: UUID) -> Company | None:
         return self._companies.get(company_id)
