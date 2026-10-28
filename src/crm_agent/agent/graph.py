@@ -10,7 +10,6 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
-from pydantic import TypeAdapter
 
 DEFAULT_SYSTEM_PROMPT = (
     "Você é um operador de CRM. Você responde em português (Brasil). "
@@ -23,9 +22,6 @@ DEFAULT_SYSTEM_PROMPT = (
 class ApprovalDecision(TypedDict):
     approved: bool
     reason: NotRequired[str | None]
-
-
-APPROVAL_DECISION_ADAPTER = TypeAdapter(ApprovalDecision)
 
 
 class PendingToolCall(TypedDict):
@@ -98,12 +94,12 @@ def build_graph(
         )
         tool_calls = model_answer.tool_calls if model_answer else []
 
-        raw_decision = interrupt(
+        decision: ApprovalDecision = interrupt(
             InterruptPayload(
                 tool_calls=[PendingToolCall(name=call["name"], args=call["args"], id=call["id"]) for call in tool_calls]
-            )
+            ), 
+            response_schema=ApprovalDecision
         )
-        decision = APPROVAL_DECISION_ADAPTER.validate_python(raw_decision)
         if decision["approved"]:
             return Command(goto="tools")
 
